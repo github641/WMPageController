@@ -1,3 +1,6 @@
+
+## 淘头条项目结合频道管理，做出了加载过的页面不必加载，频道选择完毕后用缓存刷新整体结构的方式
+
 ## [2.4.3 [BUGFIXS]()
 ### Remove observer / Cancel performSelector when dealloc.
 ### -initWithNib supoort.
