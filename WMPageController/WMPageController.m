@@ -19,22 +19,104 @@ static NSInteger const kWMControllerCountUndefined = -1;
     BOOL    _hasInited, _shouldNotScroll;
     NSInteger _initializedIndex, _controllerCount, _markedSelectIndex;
 }
-@property (nonatomic, strong, readwrite) UIViewController *currentViewController;
+//@property (nonatomic, strong, readwrite) UIViewController *currentViewController;
 // 用于记录子控制器view的frame，用于 scrollView 上的展示的位置
-@property (nonatomic, strong) NSMutableArray *childViewFrames;
+//@property (nonatomic, strong) NSMutableArray *childViewFrames;
 // 当前展示在屏幕上的控制器，方便在滚动的时候读取 (避免不必要计算)
-@property (nonatomic, strong) NSMutableDictionary *displayVC;
+//@property (nonatomic, strong) NSMutableDictionary *displayVC;
 // 用于记录销毁的viewController的位置 (如果它是某一种scrollView的Controller的话)
 @property (nonatomic, strong) NSMutableDictionary *posRecords;
 // 用于缓存加载过的控制器
-@property (nonatomic, strong) NSCache *memCache;
+//@property (nonatomic, strong) NSCache *memCache;
 @property (nonatomic, strong) NSMutableDictionary *backgroundCache;
 // 收到内存警告的次数
 @property (nonatomic, assign) int memoryWarningCount;
-@property (nonatomic, readonly) NSInteger childControllersCount;
+//@property (nonatomic, readonly) NSInteger childControllersCount;
 @end
 
 @implementation WMPageController
+
+#pragma mark - ================== 带缓存reload需要考虑的 end ==================
+// 重选频道后，当前显示的频道不再，移除当前子控制器，且从display中移除
+- (void)zy_removeViewController:(UIViewController *)viewController atIndex:(NSInteger)index {
+    // 这个废弃方法不用管
+    [self wm_rememberPositionIfNeeded:viewController atIndex:index];
+    // 子控制器视图移除
+    [viewController.view removeFromSuperview];
+    [viewController willMoveToParentViewController:nil];
+    // 子控制器移除
+    [viewController removeFromParentViewController];
+    // 当前展示控制器可变字典 中移除
+    [self.displayVC removeObjectForKey:@(index)];
+}
+
+/*
+ 重选后，各项准备工作做好了，开始reload。
+ 这个方法，按照自己以前做这个类型功能的经验，把初始化、点击菜单栏、scrollView点击相关的代码逐行看过。
+ 把涉及的需要照顾到的属性，都准备好。
+ 主要也是参照 初始化、点击菜单栏、scrollView点击三个相关功能，揉在一起的方法，写成有运气的成分，也有努力的成分。
+ 应该有比较多可以优化的地方，不过对代码的其他地方不是很熟，甚至还有一些自己不知道的bug待测试。
+ */
+- (void)zy_reloadDataWithCacheWithShouldSelect:(NSInteger)shouldSelect{
+    
+    _controllerCount = kWMControllerCountUndefined;// 触发去取最新的titleCount，更新childControllersCount，
+    _hasInited = NO;
+    
+    
+    if (!self.childControllersCount) return;
+    
+    
+    // 强制布局子视图
+    
+    
+    // 计算menuView整个的frame，及子控制器的视图frame，viewDidLoad调用过
+    [self wm_calculateSize];
+    //    // 重置滚动容器的frame、contentSize
+    [self wm_adjustScrollViewFrame];
+    
+    // menu的title有变化，直接调用了这个，目前没有问题
+    [self wm_resetMenuView];
+    //    // 重置 菜单视图的frame和其子控件的frame
+    [self wm_adjustMenuViewFrame];
+    
+    // 上一句执行完毕，设置是否初始化完毕标识为 yes
+    _hasInited = YES;
+    
+    // 应当选择索引不是之前那个，那么这里就应该 处理上面的菜单栏的选择、和下面子控制器页面的处理，注意之前处理了- (void)zy_removeViewController:(UIViewController *)viewController atIndex:(NSInteger)index
+    
+    if (_selectIndex != shouldSelect){
+        
+        // 没有初始化完，啥也不干
+        if (!_hasInited) return;
+        // 更新当前选中的索引
+        _selectIndex = (int)shouldSelect;
+        // 设置，是否是 滚动视图自主滚动为NO
+        _startDragging = NO;
+        // 计算偏移值
+        CGPoint targetP = CGPointMake(_contentViewFrame.size.width * _selectIndex, 0);
+        // 设置滚动视图偏移值，点击的 MenuItem 是否触发滚动动画
+        [self.scrollView setContentOffset:targetP animated:self.pageAnimatable];
+        
+        // 更新菜单选中
+        [self.menuView slideMenuAtProgress:_selectIndex];
+        [self.menuView deselectedItemsIfNeeded];
+        
+        // 布局子控制器
+        [self wm_layoutChildViewControllers];
+        // 更新当前显示的控制器
+        self.currentViewController = self.displayVC[@(self.selectIndex)];
+        // 发出通知
+        [self didEnterController:self.currentViewController atIndex:_selectIndex];
+        // menu的title有变化，直接调用了这个，目前没有问题
+        [self wm_resetMenuView];
+        
+    }
+    
+    
+    
+}
+
+#pragma mark - ================== 带缓存reload需要考虑的 end ==================
 
 #pragma mark - Lazy Loading
 - (NSMutableDictionary *)posRecords {
@@ -90,10 +172,13 @@ static NSInteger const kWMControllerCountUndefined = -1;
 
 - (void)forceLayoutSubviews {
     if (!self.childControllersCount) return;
-    // 计算宽高及子控制器的视图frame
+    // 计算menuView整个的frame，及子控制器的视图frame，viewDidLoad调用过
     [self wm_calculateSize];
+    // 重置滚动容器的frame、contentSize
     [self wm_adjustScrollViewFrame];
+    // 重置 菜单视图的frame和其子控件的frame
     [self wm_adjustMenuViewFrame];
+    // 遍历正在展示的视图可变字典，取其key（即索引）对应去，子控制器frames数组中取出一开始计算好的frame，重置
     [self wm_adjustDisplayingViewControllersFrame];
 }
 
@@ -261,15 +346,15 @@ static NSInteger const kWMControllerCountUndefined = -1;
 - (void)didEnterController:(UIViewController *)vc atIndex:(NSInteger)index {
     if (!self.childControllersCount) return;
     
-    // Post FullyDisplayedNotification
+    // 发送完全展示通知：Post FullyDisplayedNotification
     [self wm_postFullyDisplayedNotificationWithCurrentIndex:self.selectIndex];
-    
+    // 通过代理方法回调这个时间点
     NSDictionary *info = [self infoWithIndex:index];
     if ([self.delegate respondsToSelector:@selector(pageController:didEnterViewController:withInfo:)]) {
         [self.delegate pageController:self didEnterViewController:vc withInfo:info];
     }
     
-    // 当控制器创建时，调用延迟加载的代理方法
+    // 重量级子控制器第一次初始化的时间点：当控制器创建时，调用延迟加载的代理方法
     if (_initializedIndex == index && [self.delegate respondsToSelector:@selector(pageController:lazyLoadViewController:withInfo:)]) {
         [self.delegate pageController:self lazyLoadViewController:vc withInfo:info];
         _initializedIndex = kWMUndefinedIndex;
@@ -293,6 +378,7 @@ static NSInteger const kWMControllerCountUndefined = -1;
             [self wm_postAddToSuperViewNotificationWithIndex:i];
         }
     }
+    // 设置选中几号 item
     _selectIndex = (int)index;
 }
 
@@ -406,15 +492,17 @@ static NSInteger const kWMControllerCountUndefined = -1;
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(willResignActive:) name:UIApplicationWillResignActiveNotification object:nil];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(willEnterForeground:) name:UIApplicationWillEnterForegroundNotification object:nil];
 }
-
+// lzy:menuView整个的frame，主容器的 frame，两者并被全局变量持有
 // 包括宽高，子控制器视图 frame
 - (void)wm_calculateSize {
+    // lzy170925注：问下代理，有没有设置menuView整个的frame，没有自己算
     if ([self.dataSource respondsToSelector:@selector(pageController:preferredFrameForMenuView:)]) {
         _menuViewFrame = [self.dataSource pageController:self preferredFrameForMenuView:self.menuView];
     } else {
         CGFloat originY = (self.showOnNavigationBar && self.navigationController.navigationBar) ? 0 : CGRectGetMaxY(self.navigationController.navigationBar.frame);
         _menuViewFrame = CGRectMake(0, originY, self.view.frame.size.width, 30.0f);
     }
+    // lzy170925注：问下代理，有没有自定义 主容器的frame
     if ([self.dataSource respondsToSelector:@selector(pageController:preferredFrameForContentView:)]) {
         _contentViewFrame = [self.dataSource pageController:self preferredFrameForContentView:self.scrollView];
     } else {
@@ -423,13 +511,14 @@ static NSInteger const kWMControllerCountUndefined = -1;
         CGFloat sizeHeight = self.view.frame.size.height - tabBarHeight - originY;
         _contentViewFrame = CGRectMake(0, originY, self.view.frame.size.width, sizeHeight);
     }
+    // lzy170925注：有了上一步的，计算所有子页面的frame，并保存在数组中
     _childViewFrames = [NSMutableArray array];
     for (int i = 0; i < self.childControllersCount; i++) {
         CGRect frame = CGRectMake(i * _contentViewFrame.size.width, 0, _contentViewFrame.size.width, _contentViewFrame.size.height);
         [_childViewFrames addObject:[NSValue valueWithCGRect:frame]];
     }
 }
-
+// lzy170925注：添加滚动视图容器，并作为属性，且处理手势
 - (void)wm_addScrollView {
     WMScrollView *scrollView = [[WMScrollView alloc] init];
     scrollView.scrollsToTop = NO;
@@ -448,8 +537,9 @@ static NSInteger const kWMControllerCountUndefined = -1;
         [gestureRecognizer requireGestureRecognizerToFail:self.navigationController.interactivePopGestureRecognizer];
     }
 }
-
+// lzy170925注：添加整个人的 菜单视图，被主控制器持有为属性
 - (void)wm_addMenuView {
+    // 作者自己封装的自定义view
     WMMenuView *menuView = [[WMMenuView alloc] initWithFrame:CGRectZero];
     menuView.delegate = self;
     menuView.dataSource = self;
@@ -475,9 +565,13 @@ static NSInteger const kWMControllerCountUndefined = -1;
     }
     self.menuView = menuView;
 }
-
+/* lzy170925注:
+ 布局子控制器
+ */
 - (void)wm_layoutChildViewControllers {
+    // lzy:根据滚动容器偏移值，和总容器宽度相除，算出当前索引
     int currentPage = (int)(self.scrollView.contentOffset.x / _contentViewFrame.size.width);
+    // lzy:预加载原则
     int length = (int)self.preloadPolicy;
     int left = currentPage - length - 1;
     int right = currentPage + length + 1;
@@ -518,31 +612,42 @@ static NSInteger const kWMControllerCountUndefined = -1;
     [self willEnterController:viewController atIndex:index];
     [self.displayVC setObject:viewController forKey:@(index)];
 }
-
+// lzy:不存在displayVC和mem，才创建并添加子控制器
 // 创建并添加子控制器
 - (void)wm_addViewControllerAtIndex:(int)index {
     _initializedIndex = index;
     UIViewController *viewController = [self initializeViewControllerAtIndex:index];
+    // lzy170925注：这是页面初始化的时候，kvc给页面赋值的
     if (self.values.count == self.childControllersCount && self.keys.count == self.childControllersCount) {
         [viewController setValue:self.values[index] forKey:self.keys[index]];
     }
+    // lzy:添加子控制器
     [self addChildViewController:viewController];
+    // lzy:之前计算成功了，那么去以前计算的
     CGRect frame = self.childViewFrames.count ? [self.childViewFrames[index] CGRectValue] : self.view.frame;
     viewController.view.frame = frame;
+    // lzy:原生方法
     [viewController didMoveToParentViewController:self];
+    // lzy:添加子控制器视图到 滚动容器上
     [self.scrollView addSubview:viewController.view];
+    // lzy:通知代理，将进入特定子控制器
     [self willEnterController:viewController atIndex:index];
+    // lzy:可变字典，当前展示在屏幕上的控制器，方便在滚动的时候读取 (避免不必要计算)，键是控制器视图所在索引
     [self.displayVC setObject:viewController forKey:@(index)];
-    
+    // lzy:这个方法废弃了，默认不记录，什么也不会做
     [self wm_backToPositionIfNeeded:viewController atIndex:index];
 }
-
+// lzy:移除控制器，且从display中移除，放入缓存
 // 移除控制器，且从display中移除
 - (void)wm_removeViewController:(UIViewController *)viewController atIndex:(NSInteger)index {
+    // lzy:这个废弃方法不用管
     [self wm_rememberPositionIfNeeded:viewController atIndex:index];
+    // lzy:子控制器视图移除
     [viewController.view removeFromSuperview];
     [viewController willMoveToParentViewController:nil];
+    // lzy:子控制器移除
     [viewController removeFromParentViewController];
+    // lzy:当前展示控制器可变字典 中移除
     [self.displayVC removeObjectForKey:@(index)];
     
     // 放入缓存
@@ -690,20 +795,32 @@ static NSInteger const kWMControllerCountUndefined = -1;
     [super viewDidLoad];
     self.view.backgroundColor = [UIColor whiteColor];
     if (!self.childControllersCount) return;
+    // lzy:算整个menuView的frame，根据子控制器个数，算所有子控制器frame，保存为数组
     [self wm_calculateSize];
+    // lzy:添加滚动容器，并处理手势
     [self wm_addScrollView];
+    // lzy170925注：初始化，就是添加第0个
     [self wm_addViewControllerAtIndex:self.selectIndex];
+    // lzy:当前的控制器，从key为索引的，可变字典中取出的，在上一步添加的时候设置进入可变字典的
     self.currentViewController = self.displayVC[@(self.selectIndex)];
+    // lzy:添加menuView，被主控制器持有为属性
     [self wm_addMenuView];
+    // lzy:通知这个时间点：完全进入控制器 (即停止滑动后调用)
     [self didEnterController:self.currentViewController atIndex:self.selectIndex];
 }
-
+/* lzy170925注:
+ 控制器的view执行完 layoutSubviews方法后，将会到达这个时间点
+ Called just after the view controller's view's layoutSubviews method is invoked. Subclasses can implement as necessary. The default is a nop.
+ */
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
     
     if (!self.childControllersCount) return;
+    // lzy:强制布局子视图
     [self forceLayoutSubviews];
+    // lzy:上一句执行完毕，设置是否初始化完毕标识为 yes
     _hasInited = YES;
+    // lzy:菜单视图不存，或者且上一个标识为NO，被选中的标识都暂时放在 _markedSelectIndex，现在可以赋值回去
     [self wm_delaySelectIndexIfNeeded];
 }
 
@@ -726,13 +843,25 @@ static NSInteger const kWMControllerCountUndefined = -1;
     }
 }
 
-#pragma mark - UIScrollView Delegate
+#pragma mark - UIScrollView Delegate lzy排过序了，依次往下
+/* lzy170925注:
+ 滚动和拖拽的几个方法都是在让 菜单视图和 滚动同步：
+ 1、启用和禁用 菜单视图的 交互
+ 2、slideMenuAtProgress
+ 3、deselectedItemsIfNeeded
+ 
+ 
+ 
+ 已经开始 滚动
+ */
 - (void)scrollViewDidScroll:(UIScrollView *)scrollView {
     if (![scrollView isKindOfClass:WMScrollView.class]) return;
     
     if (_shouldNotScroll || !_hasInited) return;
     
+    // 布局子控制器
     [self wm_layoutChildViewControllers];
+    
     if (_startDragging) {
         CGFloat contentOffsetX = scrollView.contentOffset.x;
         if (contentOffsetX < 0) {
@@ -744,39 +873,34 @@ static NSInteger const kWMControllerCountUndefined = -1;
         CGFloat rate = contentOffsetX / _contentViewFrame.size.width;
         [self.menuView slideMenuAtProgress:rate];
     }
-   
+    
     // Fix scrollView.contentOffset.y -> (-20) unexpectedly.
     if (scrollView.contentOffset.y == 0) return;
     CGPoint contentOffset = scrollView.contentOffset;
     contentOffset.y = 0.0;
     scrollView.contentOffset = contentOffset;
 }
-
+/* lzy170925注:
+ 将要开始 拖拽
+ */
 - (void)scrollViewWillBeginDragging:(UIScrollView *)scrollView {
     if (![scrollView isKindOfClass:WMScrollView.class]) return;
     
     _startDragging = YES;
     self.menuView.userInteractionEnabled = NO;
 }
-
-- (void)scrollViewDidEndDecelerating:(UIScrollView *)scrollView {
+/* lzy170925注:
+ 将要结束 拖拽
+ */
+- (void)scrollViewWillEndDragging:(UIScrollView *)scrollView withVelocity:(CGPoint)velocity targetContentOffset:(inout CGPoint *)targetContentOffset {
     if (![scrollView isKindOfClass:WMScrollView.class]) return;
     
-    self.menuView.userInteractionEnabled = YES;
-    _selectIndex = (int)(scrollView.contentOffset.x / _contentViewFrame.size.width);
-    self.currentViewController = self.displayVC[@(self.selectIndex)];
-    [self didEnterController:self.currentViewController atIndex:self.selectIndex];
-    [self.menuView deselectedItemsIfNeeded];
+    _targetX = targetContentOffset->x;
 }
 
-- (void)scrollViewDidEndScrollingAnimation:(UIScrollView *)scrollView {
-    if (![scrollView isKindOfClass:WMScrollView.class]) return;
-    
-    self.currentViewController = self.displayVC[@(self.selectIndex)];
-    [self didEnterController:self.currentViewController atIndex:self.selectIndex];
-    [self.menuView deselectedItemsIfNeeded];
-}
-
+/* lzy170925注:
+ 已经结束 拖拽
+ */
 - (void)scrollViewDidEndDragging:(UIScrollView *)scrollView willDecelerate:(BOOL)decelerate {
     if (![scrollView isKindOfClass:WMScrollView.class]) return;
     
@@ -788,29 +912,111 @@ static NSInteger const kWMControllerCountUndefined = -1;
     }
 }
 
-- (void)scrollViewWillEndDragging:(UIScrollView *)scrollView withVelocity:(CGPoint)velocity targetContentOffset:(inout CGPoint *)targetContentOffset {
+
+/* lzy170925注:
+ 结束惯性：
+ 
+ 启用菜单交互，
+ 更新“选中的索引”，
+ 更新当前的自控制器，
+ 通知当前显示的控制器显示了，
+ 菜单视图deselectedItemsIfNeeded
+ */
+- (void)scrollViewDidEndDecelerating:(UIScrollView *)scrollView {
     if (![scrollView isKindOfClass:WMScrollView.class]) return;
     
-    _targetX = targetContentOffset->x;
+    self.menuView.userInteractionEnabled = YES;
+    _selectIndex = (int)(scrollView.contentOffset.x / _contentViewFrame.size.width);
+    self.currentViewController = self.displayVC[@(self.selectIndex)];
+    [self didEnterController:self.currentViewController atIndex:self.selectIndex];
+    [self.menuView deselectedItemsIfNeeded];
+}
+/* lzy170925注:
+ 滚动动画 结束
+ */
+- (void)scrollViewDidEndScrollingAnimation:(UIScrollView *)scrollView {
+    if (![scrollView isKindOfClass:WMScrollView.class]) return;
+    
+    self.currentViewController = self.displayVC[@(self.selectIndex)];
+    [self didEnterController:self.currentViewController atIndex:self.selectIndex];
+    [self.menuView deselectedItemsIfNeeded];
 }
 
+/* TODO: #待完成#
+ 菜单选择和滚动容器滚动，需要涉及的变量：
+ 1、当前选中的索引_selectIndex
+ 2、self.displayVC，放着索引，对应的子控制器
+ 3、从self.displayVC移除的时候，会放入self.memCache，也是放着索引和对应的子控制器
+ 4、都要布局子控制器：
+ 4.1：self.childControllersCount
+ 4.2：self.displayVC
+ 4.3：self.childViewFrames
+ 5、self.currentViewController
+ */
+
 #pragma mark - WMMenuView Delegate
+- (BOOL)menuView:(WMMenuView *)menu shouldSelesctedIndex:(NSInteger)index{
+    return YES;
+}
+
+/* lzy170925注:
+ 手动点击 菜单栏，会触发的方法。
+ 
+ 首先要做下过滤：
+ 1、_hasInited必须是yes
+ 2、
+ 猜测应该处理的事情，点了第几个，去滚动到第几个子view上
+ 1、计算滚动容器 偏移值
+ 2、更新正在展示的视图可变字典
+ 3、更新当前的索引（mark索引）
+ 
+ 如果那个索引还没有初始化:
+ 1、需要初始化控制器
+ 2、添加子视图
+ 3、缓存之前展示的控制器memCache
+ 
+ 如果初始化过：
+ 1、看下当前展示的控制器可变字典里有没有，有拿出来展示
+ 2、没有，看下memCache有没有缓存，有拿出来
+ 
+ */
 - (void)menuView:(WMMenuView *)menu didSelesctedIndex:(NSInteger)index currentIndex:(NSInteger)currentIndex {
+    if (index == currentIndex) return;
+    
+    // 没有初始化完，啥也不干
     if (!_hasInited) return;
+    // 更新当前选中的索引
     _selectIndex = (int)index;
+    // 设置，是否是 滚动视图自主滚动为NO
     _startDragging = NO;
+    // 计算偏移值
     CGPoint targetP = CGPointMake(_contentViewFrame.size.width * index, 0);
+    // 设置滚动视图偏移值，点击的 MenuItem 是否触发滚动动画
     [self.scrollView setContentOffset:targetP animated:self.pageAnimatable];
+    // 如果 触发滚动动画，这个方法导致为止，猜测作者在滚动方法里处理下面的逻辑了
     if (self.pageAnimatable) return;
-    // 由于不触发 -scrollViewDidScroll: 手动处理控制器
+    
+    
+    // 由于不触发 -scrollViewDidScroll: 手动处理控制器:
+    /* lzy170925注:
+     看下当前展示的控制器可变字典里有没有，取出目前索引控制器：
+     1、移除子控制器和子控制器view，
+     2、且从displayVC可变字典中移除，
+     3、放入缓存
+     */
     UIViewController *currentViewController = self.displayVC[@(currentIndex)];
     if (currentViewController) {
         [self wm_removeViewController:currentViewController atIndex:currentIndex];
     }
-    [self wm_layoutChildViewControllers];
-    self.currentViewController = self.displayVC[@(self.selectIndex)];
     
+    // 布局子控制器
+    [self wm_layoutChildViewControllers];
+    // 更新当前显示的控制器
+    self.currentViewController = self.displayVC[@(self.selectIndex)];
+    // 发出通知
     [self didEnterController:self.currentViewController atIndex:index];
+    
+    
 }
 
 - (CGFloat)menuView:(WMMenuView *)menu widthForItemAtIndex:(NSInteger)index {
@@ -858,6 +1064,19 @@ static NSInteger const kWMControllerCountUndefined = -1;
 }
 
 #pragma mark - WMMenuViewDataSource
+/**
+ *  角标 (例如消息提醒的小红点) 的数据源方法，在 WMPageController 中实现这个方法来为 menuView 提供一个 badgeView
+ 需要在返回的时候同时设置角标的 frame 属性，该 frame 为相对于 menuItem 的位置
+ *
+ *  @param index 角标的序号
+ *
+ *  @return 返回一个设置好 frame 的角标视图
+ */
+- (UIView *)menuView:(WMMenuView *)menu badgeViewAtIndex:(NSInteger)index{
+    UIView *view = nil;
+    return view;
+    
+}
 - (NSInteger)numbersOfTitlesInMenuView:(WMMenuView *)menu {
     return self.childControllersCount;
 }

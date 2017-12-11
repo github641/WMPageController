@@ -132,6 +132,37 @@ extern NSString *const WMControllerDidFullyDisplayedNotification;
 
 @interface WMPageController : UIViewController <WMMenuViewDelegate, WMMenuViewDataSource, UIScrollViewDelegate, WMPageControllerDataSource, WMPageControllerDelegate>
 
+#pragma mark - ================== 带缓存reload需要考虑的 begin==================
+/* lzy171211注:
+ 部分属性在其他地方，所以归结在这里，并注释掉了。有些是.m中的属性，没有暴露我给暴露出来了。
+ 
+ */
+/* lzy171122注:
+ 首页新闻是加小红包，app其他类似页面不显示
+ */
+@property (nonatomic, assign)NSInteger showHongbao;
+
+// 用于缓存加载过的控制器
+@property (nonatomic, strong) NSCache *memCache;
+@property (nonatomic, assign) NSInteger childControllersCount;
+@property (nonatomic, strong, readwrite) UIViewController *currentViewController;
+// 用于记录子控制器view的frame，用于 scrollView 上的展示的位置
+@property (nonatomic, strong) NSMutableArray *childViewFrames;
+// 当前展示在屏幕上的控制器，方便在滚动的时候读取 (避免不必要计算)
+@property (nonatomic, strong) NSMutableDictionary *displayVC;
+
+// 重选频道后，当前显示的频道不再显示，移除当前子控制器，且从displayVC中移除
+- (void)zy_removeViewController:(UIViewController *)viewController atIndex:(NSInteger)index ;
+/*
+ 重选后，各项准备工作做好了，开始reload。
+ 这个方法，按照自己以前做这个类型功能的经验，把初始化、点击菜单栏、scrollView点击相关的代码逐行看过。
+ 把涉及的需要照顾到的属性，都准备好。
+ 主要也是参照 初始化、点击菜单栏、scrollView点击三个相关功能，揉在一起的方法
+ */
+- (void)zy_reloadDataWithCacheWithShouldSelect:(NSInteger)shouldSelect;
+
+#pragma mark - ================== 带缓存reload需要考虑的 end ==================
+
 @property (nonatomic, weak) id<WMPageControllerDelegate> delegate;
 @property (nonatomic, weak) id<WMPageControllerDataSource> dataSource;
 
@@ -154,7 +185,7 @@ extern NSString *const WMControllerDidFullyDisplayedNotification;
  *  Titles of view controllers in page controller.
  */
 @property (nonatomic, nullable, copy) NSArray<NSString *> *titles;
-@property (nonatomic, strong, readonly) UIViewController *currentViewController;
+//@property (nonatomic, strong, readonly) UIViewController *currentViewController;
 
 /**
  *  设置选中几号 item
